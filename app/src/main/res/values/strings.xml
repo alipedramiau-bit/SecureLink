@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">SecureLink</string>
+
+    <!-- صفحه اصلی -->
+    <string name="profiles_title">پروفایل‌ها</string>
+    <string name="add_new">افزودن پروفایل</string>
+    <string name="empty_message">هنوز پروفایلی ندارید.\nبرای شروع، با دکمه + یک پروفایل WireGuard یا IKEv2/IPSec یا L2TP بسازید یا کانفیگ آماده را ایمپورت کنید.</string>
+
+    <!-- وضعیت -->
+    <string name="status_connected">متصل</string>
+    <string name="status_disconnected">قطع</string>
+    <string name="connect">اتصال</string>
+    <string name="disconnect">قطع اتصال</string>
+
+    <!-- فرم پروفایل -->
+    <string name="edit_title_new">افزودن پروفایل جدید</string>
+    <string name="edit_title_edit">ویرایش پروفایل</string>
+    <string name="profile_name">نام پروفایل</string>
+    <string name="profile_type">نوع پروتکل</string>
+    <string name="type_wireguard">وایرگارد (WireGuard)</string>
+    <string name="type_ikev2">IKEv2 / IPSec</string>
+    <string name="type_l2tp">L2TP (میکروتیک قدیمی)</string>
+    <string name="import_config">ایمپورت فایل کانفیگ (.conf)</string>
+    <string name="wg_config_hint">متن کانفیگ WireGuard</string>
+    <string name="wg_config_helper">می‌توانید فایل .conf را ایمپورت کنید یا متن کانفیگ شامل بخش‌های [Interface] و [Peer] را دستی وارد کنید.</string>
+    <string name="ike_server">آدرس سرور (دامنه یا IP)</string>
+    <string name="ike_identity">شناسه (Identity) — اختیاری</string>
+    <string name="ike_auth_method">روش احراز هویت</string>
+    <string name="auth_userpass">نام کاربری و رمز عبور (EAP)</string>
+    <string name="auth_psk">کلید مشترک (PSK)</string>
+    <string name="ike_username">نام کاربری</string>
+    <string name="ike_password">رمز عبور</string>
+    <string name="ike_psk">کلید مشترک (PSK)</string>
+
+    <!-- فرم L2TP -->
+    <string name="l2tp_server">آدرس سرور L2TP (دامنه یا IP، اختیاری: پورت)</string>
+    <string name="l2tp_username">نام کاربری PPP</string>
+    <string name="l2tp_password">رمز عبور PPP</string>
+    <string name="l2tp_secret">رمز چالش تانل (Secret) — اختیاری</string>
+    <string name="l2tp_helper">برای میکروتیک: در تنظیمات «l2tp-server server» باید use-ipsec=no باشد (پیش‌فرض) و کاربر در «PPP Secrets» با سرویس l2tp تعریف شده باشد. احراز هویت MS-CHAPv2/v1/CHAP/PAP پشتیبانی می‌شود.</string>
+    <string name="l2tp_connecting">در حال اتصال L2TP…</string>
+    <string name="save">ذخیره</string>
+    <string name="delete">حذف</string>
+    <string name="cancel">انصراف</string>
+
+    <!-- پیام‌ها -->
+    <string name="connect_success">اتصال برقرار شد</string>
+    <string name="connect_failed">اتصال ناموفق بود</string>
+    <string name="disconnect_success">اتصال قطع شد</string>
+    <string name="delete_confirm_title">حذف پروفایل</string>
+    <string name="delete_confirm_message">آیا از حذف این پروفایل مطمئن هستید؟ این عملیات قابل بازگشت نیست.</string>
+    <string name="file_read_failed">خواندن فایل ممکن نشد</string>
+    <string name="perm_vpn_needed">برای برقراری اتصال، اجازه VPN را تأیید کنید</string>
+
+    <!-- خطاها -->
+    <string name="err_name_required">نام پروفایل را وارد کنید</string>
+    <string name="err_wg_config_invalid">متن کانفیگ معتبر نیست؛ باید شامل بخش [Interface] و PrivateKey باشد</string>
+    <string name="err_ike_server_required">آدرس سرور را وارد کنید</string>
+    <string name="err_ike_credentials">نام کاربری و رمز عبور را وارد کنید</string>
+    <string name="err_ike_psk">کلید مشترک (PSK) را وارد کنید</string>
+    <string name="ikev2_unsupported">پشتیبانی IKEv2 از اندروید ۱۱ به بعد در دسترس است</string>
+
+    <!-- اعلان سرویس L2TP -->
+    <string name="notif_channel_name">وضعیت VPN</string>
+    <string name="notif_l2tp_connecting">اتصال L2TP فعال است</string>
+</resources>

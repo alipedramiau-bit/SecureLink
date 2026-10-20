@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="primary">#0F766E</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="primary_container">#CCFBF1</color>
+    <color name="on_primary_container">#042F2E</color>
+    <color name="status_connected">#15803D</color>
+    <color name="status_disconnected">#9CA3AF</color>
+    <color name="ic_launcher_background">#0F766E</color>
+</resources>
