@@ -339,8 +339,10 @@ internal object L2tpWire {
         fun bytes(): ByteArray {
             val out = ByteArray(2 + value.size)
             out[0] = type.toByte()
-            out[1] = value.size.toByte()
-            System.arraycopy(value, 0, out, 2, value.size)
+            // طول کل گزینه = ۲ بایت سرآیند + طول مقدار (RFC 1661 §4)
+            // باگ قبلی: value.size نوشته می‌شد و ACK/Reject سمت سرور خراب می‌شد
+            out[1] = (2 + value.size).toByte()
+            System.arraycopy(value, 0, out, 2, out.size - 2)
             return out
         }
     }

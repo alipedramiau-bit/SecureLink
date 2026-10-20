@@ -1,8 +1,8 @@
 package com.securelink.app.vpn.l2tp
 
-import android.os.ParcelFileDescriptor
 import android.util.Log
-import com.securelink.app.data.VpnProfile
+import java.io.InputStream
+import java.io.OutputStream
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
@@ -21,23 +21,42 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * نکته امنیتی: این پیاده‌سازی «L2TP بدون IPsec» است؛ احراز هویت با MS-CHAPv2 انجام
  * می‌شود ولی ترافیک رمزنگاری نمی‌شود. سرور MikroTik باید use-ipsec=no داشته باشد (پیش‌فرض).
+ *
+ * توالی کانال کنترل مطابق RFC 2661 §5.8: پیام ZLB یک اسلات از فضای Ns مصرف نمی‌کند
+ * (Ns پس از ارسال ZLB جلو نمی‌رود) و Nr ارسالی هرگز با Nsِ ZLB دریافتی جلو برده نمی‌شود.
+ * نقض همین قانون باعث می‌شد سرور Hello/CDN/StopCCN را تکراری بپندارد و تانل پس از
+ * چند ثانیه استفاده قطع شود.
  */
 internal class L2tpClient(
-    private val profile: VpnProfile,
     private val serverAddress: String,
+    private val username: String,
+    private val password: String,
+    private val tunnelSecret: String,
     private val protector: (DatagramSocket) -> Boolean,
-    private val callbacks: Callbacks
+    private val tunProvider: TunProvider,
+    private val callbacks: Callbacks,
+    helloIntervalMs: Long = HELLO_INTERVAL_DEFAULT_MS,
+    connectDeadlineMs: Long = CONNECT_DEADLINE_DEFAULT_MS
 ) {
     interface Callbacks {
         /** تغییر فاز — برای اعلان و لاگ. */
         fun onPhase(phase: String)
-        /**
-         * هنگامی که PPP/IPCP کامل شد؛ سرویس باید establish() را صدا بزند و fd برگرداند.
-         * اگر null برگردد اتصال با خطا قطع می‌شود.
-         */
-        fun onTunNeeded(config: TunConfig): ParcelFileDescriptor?
         /** پایان کار؛ error = null یعنی قطع عادی. */
         fun onClosed(error: String?)
+    }
+
+    /** تأمین رابط TUN — در اندروید با ParcelFileDescriptor و در تست با لوله درون‌حافظه‌ای. */
+    fun interface TunProvider {
+        fun open(config: TunConfig): TunHandle?
+    }
+
+    /** دسترسی ورودی/خروجی رابط TUN (بسته‌های IP خام). */
+    interface TunHandle {
+        /** بسته‌های دریافتی از شبکه — باید در TUN نوشته شوند. */
+        val outputStream: OutputStream
+        /** بسته‌های خروجی اپ — از TUN خوانده می‌شوند. */
+        val inputStream: InputStream
+        fun close()
     }
 
     data class TunConfig(val address: String, val dns1: String, val dns2: String, val mtu: Int)
@@ -51,8 +70,8 @@ internal class L2tpClient(
     private val TUN_MTU = 1400
     private val CONTROL_RETRY_MAX = 5
     private val PPP_RETRY_MAX = 10
-    private val CONNECT_DEADLINE_MS = 45_000L
-    private val HELLO_INTERVAL_MS = 25_000L
+    private val CONNECT_DEADLINE_MS = connectDeadlineMs
+    private val HELLO_INTERVAL_MS = helloIntervalMs
     private val REMOTE_CR_GRACE_MS = 6_000L
 
     // ---- وضعیت کلی ----
@@ -125,8 +144,11 @@ internal class L2tpClient(
     private var dns2 = 0
 
     // ---- تانل TUN ----
-    private var tunFd: ParcelFileDescriptor? = null
+    private var tunHandle: TunHandle? = null
     private var tunThread: Thread? = null
+
+    /** شماره توالیِ ZLB دریافتیِ اخیر — برای تحمل سرورهایی که (خلاف RFC) Nsِ ZLB را مصرف می‌کنند */
+    private var zlbSeenAtNr = -1
 
     // ==================================================================
     // چرخه حیات
@@ -165,7 +187,11 @@ internal class L2tpClient(
 
         val sock = DatagramSocket()
         sock.reuseAddress = true
-        protector(sock)   // مهم: قبل از هر ترافیکی تا از تونل VPN عبور نکند
+        // مهم: قبل از هر ترافیکی protect شود تا بسته‌های تانل داخل VPN خودمان گم نشوند
+        if (!protector(sock)) {
+            sock.close()
+            return shutdownInternal("محافظت سوکت UDP از تانل ممکن نشد")
+        }
         socket = sock
 
         // SCCRQ — شروع تانل
@@ -279,15 +305,37 @@ internal class L2tpClient(
 
     private fun handleDatagram(buf: ByteArray, length: Int) {
         val pkt = L2tpWire.parse(buf, length) ?: return
+        // اعتبارسنجی شناسه‌ها — نویز بسته‌های تونل‌های دیگر رد شود (بعد از تکمیل دست‌دهی)
+        if (peerTunnelId != 0 && pkt.tunnelId != ourTunnelId) return
+        if (!pkt.isControl && sessionEstablished && pkt.sessionId != ourSessionId) return
         if (pkt.isControl) {
             lastInboundControlAt = System.currentTimeMillis()
+            val avps = L2tpWire.parseAvps(buf, pkt.payloadOffset, pkt.payloadEnd)
+            val isZlb = avps.isEmpty()
             if (pkt.ns == nrIn) {
-                nrIn = (nrIn + 1) and 0xFFFF
-                processControl(L2tpWire.parseAvps(buf, pkt.payloadOffset, pkt.payloadEnd))
-            } else if (pkt.ns >= nrIn) {
-                return   // شکاف — فرستنده بازارسال می‌کند
+                if (isZlb) {
+                    // RFC 2661 §5.8: «Ns پس از ZLB جلو نمی‌رود» — nrIn نباید جلو برود؛
+                    // وگرنه پیام واقعی بعدی سرور (Hello/CDN/…) تکراری پنداشته شده و نادیده گرفته می‌شود.
+                    zlbSeenAtNr = nrIn
+                } else {
+                    nrIn = (nrIn + 1) and 0xFFFF
+                    zlbSeenAtNr = -1
+                    processControl(avps)
+                }
+            } else if (isAhead(pkt.ns, nrIn)) {
+                val tolerated = !isZlb &&
+                    zlbSeenAtNr == nrIn &&
+                    pkt.ns == ((nrIn + 1) and 0xFFFF)
+                if (tolerated) {
+                    // برخی سرورها (خلاف RFC) برای ZLB هم Ns مصرف می‌کنند — تحمل می‌شود
+                    nrIn = (pkt.ns + 1) and 0xFFFF
+                    zlbSeenAtNr = -1
+                    processControl(avps)
+                } else {
+                    return   // شکاف واقعی — فرستنده بازارسال می‌کند (بدون ACK طبق RFC)
+                }
             }
-            // حذف بسته‌های تأییدشده با Nr (مقایسه چرخه‌ای؛ Nr باید جلوتر از Ns باشد)
+            // حذف بسته‌های تأییدشده با Nr (مقایسه چرخه‌ای؛ شامل ZLB دریافتی)
             synchronized(pending) {
                 pending.removeAll { ((pkt.nr - it.ns) and 0xFFFF) in 1..0x7FFF }
             }
@@ -297,6 +345,10 @@ internal class L2tpClient(
             handlePppFrame(buf, pkt.payloadOffset, pkt.payloadEnd)
         }
     }
+
+    /** آیا ns به‌صورت چرخه‌ای (modulo 65536) جلوتر از base است؟ */
+    private fun isAhead(ns: Int, base: Int): Boolean =
+        ((ns - base) and 0xFFFF) in 1..0x7FFF
 
     private fun processControl(avps: List<L2tpWire.Avp>) {
         val msgType = L2tpWire.findAvp(avps, L2tpWire.AVP_MESSAGE_TYPE)?.u16() ?: return
@@ -314,7 +366,7 @@ internal class L2tpClient(
                 val avps2 = ArrayList<ByteArray>()
                 avps2.add(L2tpWire.avpU16(L2tpWire.AVP_MESSAGE_TYPE, L2tpWire.MSG_SCCCN))
                 if (challenge != null && challenge.isNotEmpty()) {
-                    val secret = profile.l2tpSecret.toByteArray(Charsets.US_ASCII)
+                    val secret = tunnelSecret.toByteArray(Charsets.US_ASCII)
                     val resp = L2tpCrypto.l2tpChallengeResponse(L2tpWire.MSG_SCCCN, secret, challenge)
                     avps2.add(L2tpWire.avp(L2tpWire.AVP_CHALLENGE_RESPONSE, resp, true))
                 }
@@ -395,7 +447,7 @@ internal class L2tpClient(
 
     private fun writeTun(buf: ByteArray, start: Int, len: Int) {
         if (start < 0 || len <= 0) return
-        val out = tunOutputStream ?: return
+        val out = tunHandle?.outputStream ?: return
         try {
             out.write(buf, start, len)
             out.flush()
@@ -403,8 +455,6 @@ internal class L2tpClient(
             Log.w(TAG, "tun write failed", e)
         }
     }
-
-    private var tunOutputStream: java.io.FileOutputStream? = null
 
     // ---- LCP ----
 
@@ -414,7 +464,11 @@ internal class L2tpClient(
         if (!authOptionRejected) opts.add(L2tpWire.optAuth(proposedAuth))
         if (!magicRejected) opts.add(L2tpWire.optU32(L2tpWire.LCP_OPT_MAGIC, magic.toLong() and 0xFFFFFFFFL))
         lcpReqId = (lcpReqId + 1) and 0xFF
-        lcpConfReq = L2tpWire.pppControlPacket(L2tpWire.PPP_LCP, L2tpWire.CODE_CONFIGURE_REQUEST, lcpReqId, concatBytes(opts))
+        // فریم PPP باید داخل پیام داده L2TP کپسوله شود — ارسال فریم خام قابل پردازش نیست
+        lcpConfReq = L2tpWire.buildData(
+            peerTunnelId, peerSessionId,
+            L2tpWire.pppControlPacket(L2tpWire.PPP_LCP, L2tpWire.CODE_CONFIGURE_REQUEST, lcpReqId, concatBytes(opts))
+        )
         lcpReqRetries = 0
         lcpReqSentAt = System.currentTimeMillis()
         sendDatagram(lcpConfReq!!)
@@ -581,8 +635,8 @@ internal class L2tpClient(
     // ---- PAP ----
 
     private fun sendPapRequest() {
-        val user = profile.l2tpUsername.toByteArray(Charsets.UTF_8)
-        val pass = profile.l2tpPassword.toByteArray(Charsets.UTF_8)
+        val user = username.toByteArray(Charsets.UTF_8)
+        val pass = password.toByteArray(Charsets.UTF_8)
         val data = ByteArray(2 + user.size + 2 + pass.size)
         var i = 0
         data[i++] = user.size.toByte()
@@ -613,8 +667,8 @@ internal class L2tpClient(
                 val valueSize = p.data[0].toInt() and 0xFF
                 if (valueSize == 0 || 1 + valueSize > p.data.size) return
                 chapServerChallenge = p.data.copyOfRange(1, 1 + valueSize)
-                val user = profile.l2tpUsername
-                val pass = profile.l2tpPassword
+                val user = username
+                val pass = password
                 val responseValue: ByteArray = when {
                     // اگر سرور صراحتاً CHAP-MD5 خواسته، اولویت با آن است (چالش MD5 ممکن است ۸ بایتی هم باشد)
                     requiredAuth == AuthMethod.CHAP_MD5 -> {
@@ -672,8 +726,8 @@ internal class L2tpClient(
         val hex = msg.substring(sIdx + 2).take(40)
         try {
             val expected = L2tpCrypto.generateAuthenticatorResponse(
-                profile.l2tpPassword, chapNtResponse, chapPeerChallenge,
-                chapServerChallenge, profile.l2tpUsername
+                password, chapNtResponse, chapPeerChallenge,
+                chapServerChallenge, username
             )
             // chapPeerChallenge در buildMsChap2ResponseValue ساخته می‌شود؛ آنجا ذخیره کن
             val expectedHex = expected.joinToString("") { String.format("%02X", it) }
@@ -709,7 +763,11 @@ internal class L2tpClient(
         if (includeDns1Opt) opts.add(L2tpWire.optIp(L2tpWire.IPCP_OPT_PRIMARY_DNS, dns1))
         if (includeDns2Opt) opts.add(L2tpWire.optIp(L2tpWire.IPCP_OPT_SECONDARY_DNS, dns2))
         ipcpReqId = (ipcpReqId + 1) and 0xFF
-        ipcpConfReq = L2tpWire.pppControlPacket(L2tpWire.PPP_IPCP, L2tpWire.CODE_CONFIGURE_REQUEST, ipcpReqId, concatBytes(opts))
+        // کپسوله‌سازی در L2TP — همان اصلاح LCP
+        ipcpConfReq = L2tpWire.buildData(
+            peerTunnelId, peerSessionId,
+            L2tpWire.pppControlPacket(L2tpWire.PPP_IPCP, L2tpWire.CODE_CONFIGURE_REQUEST, ipcpReqId, concatBytes(opts))
+        )
         ipcpReqRetries = 0
         ipcpReqSentAt = System.currentTimeMillis()
         sendDatagram(ipcpConfReq!!)
@@ -784,24 +842,15 @@ internal class L2tpClient(
         val d1 = if (dns1 != 0) L2tpWire.ipToString(dns1) else "8.8.8.8"
         val d2 = if (dns2 != 0) L2tpWire.ipToString(dns2) else "1.1.1.1"
         Log.i(TAG, "bringing up tun: ip=$ip dns=$d1,$d2 mtu=$TUN_MTU")
-        val fd = callbacks.onTunNeeded(TunConfig(ip, d1, d2, TUN_MTU))
-        if (fd == null) return shutdownInternal("ایجاد رابط تانل ممکن نشد")
-        tunFd = fd
-        try {
-            tunOutputStream = java.io.FileOutputStream(fd.fileDescriptor)
-        } catch (t: Throwable) {
-            return shutdownInternal("دسترسی به رابط تانل ممکن نشد")
-        }
+        val handle = tunProvider.open(TunConfig(ip, d1, d2, TUN_MTU))
+        if (handle == null) return shutdownInternal("ایجاد رابط تانل ممکن نشد")
+        tunHandle = handle
         setPhase(Phase.CONNECTED)
 
         tunThread = Thread({
-            val input = try {
-                java.io.FileInputStream(fd.fileDescriptor)
-            } catch (t: Throwable) {
-                return@Thread
-            }
-            val buf = ByteArray(4096)
             try {
+                val input = handle.inputStream
+                val buf = ByteArray(4096)
                 while (running.get()) {
                     val n = input.read(buf)
                     if (n <= 0) break
@@ -811,8 +860,10 @@ internal class L2tpClient(
                     sendDatagram(packet)
                 }
             } catch (_: Exception) {
+                // خروج از حلقه — پایین در finally بررسی می‌شود
             } finally {
-                try { input.close() } catch (_: Exception) {}
+                // خطای ورودی/خروجی TUN نباید به «اتصال زامبی» برسد
+                if (running.get()) shutdownInternal("خطای ورودی/خروجی رابط تانل")
             }
         }, "SecureLink-L2TP-Tun")
         tunThread?.start()
@@ -897,9 +948,11 @@ internal class L2tpClient(
         callbacks.onPhase(p.name)
     }
 
+    @Synchronized
     private fun shutdownInternal(reason: String?) {
         if (closedNotified) return
         closedNotified = true
+        running.set(false)
         Log.i(TAG, "shutdown: $reason")
         // پایان مذاکره‌دار جلسه/تانل — نهایت تلاش
         try {
@@ -922,10 +975,8 @@ internal class L2tpClient(
 
         try { socket?.close() } catch (_: Throwable) { }
         socket = null
-        try { tunOutputStream?.close() } catch (_: Throwable) { }
-        tunOutputStream = null
-        try { tunFd?.close() } catch (_: Throwable) { }
-        tunFd = null
+        try { tunHandle?.close() } catch (_: Throwable) { }
+        tunHandle = null
         phase = Phase.CLOSED
         callbacks.onClosed(reason)
     }
@@ -953,5 +1004,7 @@ internal class L2tpClient(
 
     companion object {
         private const val TAG = "SecureLink-L2TP"
+        const val HELLO_INTERVAL_DEFAULT_MS = 25_000L
+        const val CONNECT_DEADLINE_DEFAULT_MS = 45_000L
     }
 }

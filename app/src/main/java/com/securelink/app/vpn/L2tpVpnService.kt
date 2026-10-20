@@ -26,7 +26,7 @@ import com.securelink.app.vpn.l2tp.L2tpClient
  * جریان کار:
  *  1) VpnEngine.connectL2tp سرویس را با ACTION_CONNECT و شناسه پروفایل استارت می‌کند
  *  2) سرویس L2tpClient را راه می‌اندازد (SCCRQ تا IPCP)
- *  3) هنگام onTunNeeded، establish() صدا زده شده و fd به کلاینت برمی‌گردد
+ *  3) هنگام درخواست TUN، establish() صدا زده شده و TunHandle به کلاینت برمی‌گردد
  *  4) قطع با ACTION_DISCONNECT
  */
 class L2tpVpnService : VpnService() {
@@ -92,21 +92,15 @@ class L2tpVpnService : VpnService() {
         VpnEngine.notifyChanged()
 
         val l2tpClient = L2tpClient(
-            profile = profile,
             serverAddress = profile.l2tpServer,
+            username = profile.l2tpUsername,
+            password = profile.l2tpPassword,
+            tunnelSecret = profile.l2tpSecret,
             protector = { socket -> protect(socket) },
+            tunProvider = L2tpClient.TunProvider { config -> openTun(config) },
             callbacks = object : L2tpClient.Callbacks {
                 override fun onPhase(phase: String) {
                     Log.d(TAG, "phase=$phase")
-                }
-
-                override fun onTunNeeded(config: L2tpClient.TunConfig): ParcelFileDescriptor? {
-                    return try {
-                        establishVpn(config)
-                    } catch (t: Throwable) {
-                        Log.e(TAG, "establish failed", t)
-                        null
-                    }
                 }
 
                 override fun onClosed(error: String?) {
@@ -128,16 +122,36 @@ class L2tpVpnService : VpnService() {
         client = null
     }
 
-    private fun establishVpn(config: L2tpClient.TunConfig): ParcelFileDescriptor? {
-        val builder = Builder()
-            .setSession("SecureLink L2TP")
-            .setMtu(config.mtu)
-            .addAddress(config.address, 32)
-            .addRoute("0.0.0.0", 0)
-        builder.addDnsServer(config.dns1)
-        if (config.dns2 != config.dns1) builder.addDnsServer(config.dns2)
-        // سوکت UDP کلاینت با protect() از تونل عبور می‌کند؛ حالت پیش‌فرض (blocking) حفظ می‌شود
-        return builder.establish()
+    /** ساخت رابط TUN و بازگرداندن دستگیره برای کلاینت L2TP. */
+    private fun openTun(config: L2tpClient.TunConfig): L2tpClient.TunHandle? {
+        return try {
+            val builder = Builder()
+                .setSession("SecureLink L2TP")
+                .setMtu(config.mtu)
+                .addAddress(config.address, 32)
+                .addRoute("0.0.0.0", 0)
+            builder.addDnsServer(config.dns1)
+            if (config.dns2 != config.dns1) builder.addDnsServer(config.dns2)
+            // سوکت UDP کلاینت با protect() از تونل عبور می‌کند
+            val fd = builder.establish() ?: return null
+            FdTunHandle(fd)
+        } catch (t: Throwable) {
+            Log.e(TAG, "establish failed", t)
+            null
+        }
+    }
+
+    /** دستگیره TUN مبتنی بر ParcelFileDescriptor برای اجرا روی اندروید. */
+    private class FdTunHandle(private val fd: ParcelFileDescriptor) : L2tpClient.TunHandle {
+        override val outputStream: java.io.OutputStream by lazy {
+            java.io.FileOutputStream(fd.fileDescriptor)
+        }
+        override val inputStream: java.io.InputStream by lazy {
+            java.io.FileInputStream(fd.fileDescriptor)
+        }
+        override fun close() {
+            try { fd.close() } catch (_: Throwable) { }
+        }
     }
 
     // ------------------------------------------------------------------
