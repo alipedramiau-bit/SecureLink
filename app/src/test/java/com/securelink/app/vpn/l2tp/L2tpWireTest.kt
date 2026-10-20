@@ -60,8 +60,8 @@ class L2tpWireTest {
 
     @Test
     fun `data packet with sequence fields parses`() {
-        // 0x0002 + S-bit (0x0800) → 000a
-        val pkt = unhex("000a03e9022b0005000701020304")
+        // 0x0002 + S-bit (0x0800) → 0802
+        val pkt = unhex("080203e9022b0005000701020304")
         val parsed = L2tpWire.parse(pkt, pkt.size)!!
         assertEquals(false, parsed.isControl)
         assertEquals(5, parsed.ns)
@@ -105,8 +105,11 @@ class L2tpWireTest {
 
     @Test
     fun `ppp frame with single byte protocol falls back (PFC)`() {
-        // IPv4 با پروتکل تک‌بایتی 0x21 (PFC سمت سرور)
-        val frame = byteArrayOf(0xFF.toByte(), 0x03.toByte(), 0x21, 0x45, 0, 0)
+        // IPv4 با پروتکل تک‌بایتی 0x21 (PFC سمت سرور) — یک بسته IP کامل ۲۰ بایتی
+        val ip = ByteArray(20)
+        ip[0] = 0x45
+        ip[2] = 0; ip[3] = 20
+        val frame = byteArrayOf(0xFF.toByte(), 0x03.toByte(), 0x21) + ip
         val (protocol, _) = L2tpWire.parsePpp(frame, 0, frame.size)!!
         assertEquals(L2tpWire.PPP_IPV4, protocol)
     }
