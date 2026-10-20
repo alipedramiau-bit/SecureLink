@@ -616,13 +616,19 @@ internal class L2tpClient(
                 val user = profile.l2tpUsername
                 val pass = profile.l2tpPassword
                 val responseValue: ByteArray = when {
+                    // اگر سرور صراحتاً CHAP-MD5 خواسته، اولویت با آن است (چالش MD5 ممکن است ۸ بایتی هم باشد)
+                    requiredAuth == AuthMethod.CHAP_MD5 -> {
+                        chapIsV2 = false
+                        requiredAuth = AuthMethod.CHAP_MD5
+                        L2tpCrypto.chapMd5Response(p.id, pass.toByteArray(Charsets.UTF_8), chapServerChallenge)
+                    }
                     valueSize == 16 && (requiredAuth == AuthMethod.MSCHAP2 || requiredAuth == AuthMethod.NONE) -> {
                         chapIsV2 = true
                         requiredAuth = AuthMethod.MSCHAP2
                         chapPeerChallenge = ByteArray(16).also { java.security.SecureRandom().nextBytes(it) }
                         L2tpCrypto.buildMsChap2ResponseValue(chapServerChallenge, chapPeerChallenge, user, pass)
                     }
-                    valueSize == 8 -> {
+                    valueSize == 8 && (requiredAuth == AuthMethod.MSCHAP1 || requiredAuth == AuthMethod.NONE) -> {
                         chapIsV2 = false
                         requiredAuth = AuthMethod.MSCHAP1
                         L2tpCrypto.buildMsChap1ResponseValue(chapServerChallenge, pass)

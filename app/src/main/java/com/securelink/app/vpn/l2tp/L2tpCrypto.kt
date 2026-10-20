@@ -175,8 +175,9 @@ internal object L2tpCrypto {
         userName: String
     ): ByteArray {
         val hashHash = md4(ntPasswordHash(password))
-        val magic1 = "Magic server to client signing constant".toByteArray(Charsets.US_ASCII)
-        val magic2 = "Pad to make it do more than one iteration".toByteArray(Charsets.US_ASCII)
+        // ثابت‌های RFC 2759 §8.7 — با بایت صفرِ پدینگ (۴۰ و ۴۲ بایت کامل)
+        val magic1 = "Magic server to client signing constant".toByteArray(Charsets.US_ASCII) + ByteArray(1)
+        val magic2 = "Pad to make it do more than one iteration".toByteArray(Charsets.US_ASCII) + ByteArray(1)
         val d = sha1(concat(hashHash, ntResponse, magic1))
         val challenge = challengeHash(peerChallenge, authChallenge, userName)
         val d2 = sha1(concat(d, challenge, magic2))
@@ -216,23 +217,16 @@ internal object L2tpCrypto {
         return out
     }
 
-    /** مقدار ۴۸ بایتی MS-CHAPv1: LM-Response(24) ‖ NT-Response(24). */
+    /**
+     * مقدار ۴۹ بایتی MS-CHAPv1 مطابق RFC 2433 §6:
+     * LM-Response(24) ‖ NT-Response(24) ‖ Flags(1)
+     * طبق توصیه RFC، LM-Response منسوخ است و صفر پر می‌شود؛ Flags = 1 یعنی از پاسخ NT استفاده کن.
+     */
     fun buildMsChap1ResponseValue(challenge8: ByteArray, password: String): ByteArray {
-        val raw = password.uppercase().toByteArray(Charsets.US_ASCII)
-        val paddedPw = ByteArray(14)
-        System.arraycopy(raw, 0, paddedPw, 0, minOf(raw.size, 14))
-        val k1 = desKeyFrom7Bytes(paddedPw, 0)
-        val k2 = desKeyFrom7Bytes(paddedPw, 7)
-        val magic = "KGS!@#\$%".toByteArray(Charsets.US_ASCII)
-        val lmHash = concat(desEncryptBlock(k1, magic), desEncryptBlock(k2, magic))
-        val padded = ByteArray(21)
-        System.arraycopy(lmHash, 0, padded, 0, 16)
-        val lmResponse = ByteArray(24)
-        for (i in 0 until 3) {
-            val key = desKeyFrom7Bytes(padded, i * 7)
-            System.arraycopy(desEncryptBlock(key, challenge8), 0, lmResponse, i * 8, 8)
-        }
-        return concat(lmResponse, msChap1NtResponse(challenge8, password))
+        val value = ByteArray(49)
+        System.arraycopy(msChap1NtResponse(challenge8, password), 0, value, 24, 24)
+        value[48] = 0x01
+        return value
     }
 
     // ------------------------------------------------------------------
