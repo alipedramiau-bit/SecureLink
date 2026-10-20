@@ -55,4 +55,18 @@
 
     <string name="notif_channel_name">VPN status</string>
     <string name="notif_l2tp_connecting">L2TP connection active</string>
+
+    <!-- Diagnostics log -->
+    <string name="log_open">Diagnostics log</string>
+    <string name="log_title">Diagnostics log</string>
+    <string name="log_last_error_title">Last disconnect reason:</string>
+    <string name="log_copy">Copy</string>
+    <string name="log_share">Share</string>
+    <string name="log_clear">Clear</string>
+    <string name="log_cleared">Log cleared</string>
+    <string name="log_copied">Log copied</string>
+    <string name="log_empty">No log entries yet. Establish a connection and events will appear here.</string>
+    <string name="log_hint">If the connection drops, tap “Share” and send this log for troubleshooting.</string>
+    <string name="log_share_subject">SecureLink diagnostics log</string>
+    <string name="l2tp_disconnected_toast">L2TP disconnected: %1$s</string>
 </resources>

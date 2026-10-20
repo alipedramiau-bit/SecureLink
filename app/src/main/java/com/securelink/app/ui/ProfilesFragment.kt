@@ -14,7 +14,9 @@ import com.securelink.app.data.ProfileStore
 import com.securelink.app.data.ProfileType
 import com.securelink.app.data.VpnProfile
 import com.securelink.app.databinding.FragmentProfilesBinding
+import com.securelink.app.vpn.L2tpVpnService
 import com.securelink.app.vpn.VpnEngine
+import com.securelink.app.vpn.VpnLog
 
 /**
  * صفحه اصلی: لیست پروفایل‌ها با امکان اتصال/قطع و ویرایش.
@@ -45,8 +47,14 @@ class ProfilesFragment : Fragment() {
         }
 
     private val engineListener: () -> Unit = {
-        if (isAdded) adapter.notifyDataSetChanged()
+        if (isAdded) {
+            adapter.notifyDataSetChanged()
+            maybeShowL2tpErrorToast()
+        }
     }
+
+    /** زمانِ آخرین خطای قطع‌شدنی که به کاربر نشان داده شد */
+    private var lastErrorShownAt = 0L
 
     override fun onCreateView(
         inflater: LayoutInflater,
@@ -69,6 +77,7 @@ class ProfilesFragment : Fragment() {
         binding.rvProfiles.adapter = adapter
 
         binding.fabAdd.setOnClickListener { openEditor(null) }
+        binding.btnDiagnostics.setOnClickListener { openDiagnostics() }
 
         refreshList()
     }
@@ -206,6 +215,30 @@ class ProfilesFragment : Fragment() {
             .replace(R.id.fragmentContainer, fragment)
             .addToBackStack(null)
             .commit()
+    }
+
+    private fun openDiagnostics() {
+        parentFragmentManager.beginTransaction()
+            .replace(R.id.fragmentContainer, LogFragment())
+            .addToBackStack(null)
+            .commit()
+    }
+
+    /**
+     * اگر اتصال L2TP خودسرانه قطع شده باشد، علت را به کاربر نشان می‌دهیم.
+     * قطعی که خود کاربر از همین صفحه زده را نشان نمی‌دهیم (چون توست موفقیت دیده می‌شود).
+     */
+    private fun maybeShowL2tpErrorToast() {
+        val at = VpnLog.lastL2tpErrorAt
+        if (at == 0L || at <= lastErrorShownAt) return
+        lastErrorShownAt = at
+        val err = VpnLog.lastL2tpError ?: return
+        if (err == L2tpVpnService.REASON_USER_DISCONNECT) return
+        Toast.makeText(
+            requireContext(),
+            getString(R.string.l2tp_disconnected_toast, err),
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     // ---- ابزار ----

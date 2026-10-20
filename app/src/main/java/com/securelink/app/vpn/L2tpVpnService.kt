@@ -88,6 +88,7 @@ class L2tpVpnService : VpnService() {
             Log.w(TAG, "L2TP client already running")
             return
         }
+        VpnLog.log("SVC", "درخواست اتصال L2TP برای پروفایل «${profile.name}»")
         VpnEngine.l2tpActiveProfileId = profile.id
         VpnEngine.notifyChanged()
 
@@ -104,6 +105,7 @@ class L2tpVpnService : VpnService() {
                 }
 
                 override fun onClosed(error: String?) {
+                    VpnLog.log("SVC", "سرویس L2TP متوقف شد")
                     if (VpnEngine.l2tpActiveProfileId == profile.id) {
                         VpnEngine.l2tpActiveProfileId = null
                     }
@@ -137,6 +139,7 @@ class L2tpVpnService : VpnService() {
             FdTunHandle(fd)
         } catch (t: Throwable) {
             Log.e(TAG, "establish failed", t)
+            VpnLog.log("SVC", "ایجاد TUN ناموفق: ${t.javaClass.simpleName}: ${t.message}")
             null
         }
     }
@@ -194,6 +197,9 @@ class L2tpVpnService : VpnService() {
         private const val TAG = "SecureLink-L2TP-Svc"
         private const val CHANNEL_ID = "securelink_vpn"
         private const val NOTIFICATION_ID = 42
+
+        /** علت قطعی که به «درخواست خود کاربر» برمی‌گردد — UI برای آن توست خطا نشان نمی‌دهد */
+        const val REASON_USER_DISCONNECT = "قطع توسط کاربر"
 
         const val ACTION_CONNECT = "com.securelink.app.l2tp.CONNECT"
         const val ACTION_DISCONNECT = "com.securelink.app.l2tp.DISCONNECT"

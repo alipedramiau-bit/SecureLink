@@ -8,6 +8,7 @@ KOTLINC="${KOTLINC:-kotlinc}"
 mkdir -p build
 
 SOURCES=(
+  app/src/main/java/com/securelink/app/vpn/VpnLog.kt
   app/src/main/java/com/securelink/app/vpn/l2tp/L2tpClient.kt
   app/src/main/java/com/securelink/app/vpn/l2tp/L2tpWire.kt
   app/src/main/java/com/securelink/app/vpn/l2tp/L2tpCrypto.kt

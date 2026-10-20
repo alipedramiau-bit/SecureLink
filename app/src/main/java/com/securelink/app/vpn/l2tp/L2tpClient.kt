@@ -9,6 +9,7 @@ import java.net.InetAddress
 import java.net.SocketTimeoutException
 import java.util.Random
 import java.util.concurrent.atomic.AtomicBoolean
+import com.securelink.app.vpn.VpnLog
 
 /**
  * کلاینت L2TPv2 خالص (RFC 2661) + PPP (RFC 1661) برای اتصال به سرورهای MikroTik RouterOS.
@@ -161,6 +162,7 @@ internal class L2tpClient(
                 runLoop()
             } catch (t: Throwable) {
                 Log.e(TAG, "runLoop crashed", t)
+                VpnLog.log("L2TP", "خطای داخلی: ${t.javaClass.simpleName}: ${t.message}")
                 shutdownInternal(t.message ?: t.javaClass.simpleName)
             }
         }, "SecureLink-L2TP").start()
@@ -180,6 +182,7 @@ internal class L2tpClient(
 
     private fun runLoop() {
         setPhase(Phase.TUNNEL_CONNECT)
+        VpnLog.log("L2TP", "شروع اتصال به $serverAddress")
         serverPort = L2tpWire.DEFAULT_PORT
         val addr = resolveServer(serverAddress)
             ?: return shutdownInternal("آدرس سرور قابل حل نیست: $serverAddress")
@@ -371,6 +374,7 @@ internal class L2tpClient(
                     avps2.add(L2tpWire.avp(L2tpWire.AVP_CHALLENGE_RESPONSE, resp, true))
                 }
                 Log.i(TAG, "tunnel established (tid=$peerTunnelId)")
+                VpnLog.log("L2TP", "تانل L2TP برقرار شد")
                 sendControl(L2tpWire.MSG_SCCCN, 0, concatBytes(avps2))
                 setPhase(Phase.SESSION_CONNECT)
                 sendControl(L2tpWire.MSG_ICRQ, 0, icrqAvps())
@@ -380,6 +384,7 @@ internal class L2tpClient(
                 peerSessionId = L2tpWire.findAvp(avps, L2tpWire.AVP_ASSIGNED_SESSION_ID)?.u16() ?: 0
                 if (peerSessionId == 0) return shutdownInternal("سرور شناسه جلسه را ارسال نکرد")
                 Log.i(TAG, "session established (sid=$peerSessionId)")
+                VpnLog.log("L2TP", "جلسه L2TP برقرار شد")
                 sendControl(L2tpWire.MSG_ICCN, peerSessionId, iccnAvps())
                 sessionEstablished = true
                 setPhase(Phase.LCP)
@@ -388,11 +393,13 @@ internal class L2tpClient(
             L2tpWire.MSG_STOP_CCN -> {
                 val result = parseResultCode(L2tpWire.findAvp(avps, L2tpWire.AVP_RESULT_CODE))
                 running.set(false)
+                VpnLog.log("L2TP", "سرور فرمان بستن تانل (StopCCN) را فرستاد")
                 shutdownInternal(result?.second ?: "سرور تانل را بست")
             }
             L2tpWire.MSG_CDN -> {
                 val result = parseResultCode(L2tpWire.findAvp(avps, L2tpWire.AVP_RESULT_CODE))
                 running.set(false)
+                VpnLog.log("L2TP", "سرور فرمان بستن جلسه (CDN) را فرستاد")
                 shutdownInternal(result?.second ?: "سرور جلسه را بست")
             }
             L2tpWire.MSG_HELLO -> { /* با ZLB تأیید شد */ }
@@ -498,6 +505,7 @@ internal class L2tpClient(
                                 proposedAuth = algo
                                 authOptionRejected = false
                                 Log.i(TAG, "server suggests auth=${Integer.toHexString(algo)}")
+                                VpnLog.log("L2TP", "سرور روش احراز هویت را ${authName(algo)} تعیین کرد")
                             }
                         }
                         L2tpWire.LCP_OPT_MRU -> { /* همان MRU خودمان را نگه می‌داریم */ }
@@ -707,6 +715,7 @@ internal class L2tpClient(
                 verifyChapSuccess(p)
                 authDone = true
                 Log.i(TAG, "authentication succeeded")
+                VpnLog.log("L2TP", "احراز هویت موفق بود")
                 setPhase(Phase.IPCP)
                 sendIpcpConfReq()
             }
@@ -842,6 +851,7 @@ internal class L2tpClient(
         val d1 = if (dns1 != 0) L2tpWire.ipToString(dns1) else "8.8.8.8"
         val d2 = if (dns2 != 0) L2tpWire.ipToString(dns2) else "1.1.1.1"
         Log.i(TAG, "bringing up tun: ip=$ip dns=$d1,$d2 mtu=$TUN_MTU")
+        VpnLog.log("L2TP", "تانل داده آماده شد: IP=$ip DNS=$d1,$d2 MTU=$TUN_MTU")
         val handle = tunProvider.open(TunConfig(ip, d1, d2, TUN_MTU))
         if (handle == null) return shutdownInternal("ایجاد رابط تانل ممکن نشد")
         tunHandle = handle
@@ -945,6 +955,7 @@ internal class L2tpClient(
 
     private fun setPhase(p: Phase) {
         phase = p
+        VpnLog.log("L2TP", "مرحله: ${phaseLabel(p)}")
         callbacks.onPhase(p.name)
     }
 
@@ -954,6 +965,7 @@ internal class L2tpClient(
         closedNotified = true
         running.set(false)
         Log.i(TAG, "shutdown: $reason")
+        VpnLog.l2tpError(reason)
         // پایان مذاکره‌دار جلسه/تانل — نهایت تلاش
         try {
             if (sessionEstablished) {
@@ -1006,5 +1018,25 @@ internal class L2tpClient(
         private const val TAG = "SecureLink-L2TP"
         const val HELLO_INTERVAL_DEFAULT_MS = 25_000L
         const val CONNECT_DEADLINE_DEFAULT_MS = 45_000L
+
+        /** نام خوانا برای کد روش احراز هویت (برای گزارش) */
+        fun authName(algo: Int): String = when (algo) {
+            L2tpWire.AUTH_PAP -> "PAP"
+            L2tpWire.AUTH_CHAP_MD5 -> "CHAP-MD5"
+            L2tpWire.AUTH_MSCHAP1 -> "MS-CHAPv1"
+            L2tpWire.AUTH_MSCHAP2 -> "MS-CHAPv2"
+            else -> String.format("0x%04X", algo)
+        }
+
+        /** برچسب فارسی مراحل اتصال برای گزارش */
+        private fun phaseLabel(p: Phase): String = when (p) {
+            Phase.TUNNEL_CONNECT -> "اتصال تانل"
+            Phase.SESSION_CONNECT -> "ایجاد جلسه"
+            Phase.LCP -> "مذاکره LCP"
+            Phase.AUTH -> "احراز هویت"
+            Phase.IPCP -> "دریافت IP (IPCP)"
+            Phase.CONNECTED -> "متصل"
+            Phase.CLOSED -> "بسته"
+        }
     }
 }

@@ -64,4 +64,18 @@
     <!-- اعلان سرویس L2TP -->
     <string name="notif_channel_name">وضعیت VPN</string>
     <string name="notif_l2tp_connecting">اتصال L2TP فعال است</string>
+
+    <!-- گزارش عیب‌یابی -->
+    <string name="log_open">گزارش عیب‌یابی</string>
+    <string name="log_title">گزارش عیب‌یابی</string>
+    <string name="log_last_error_title">آخرین علت قطع‌شدن:</string>
+    <string name="log_copy">کپی</string>
+    <string name="log_share">ارسال</string>
+    <string name="log_clear">پاک کردن</string>
+    <string name="log_cleared">گزارش پاک شد</string>
+    <string name="log_copied">گزارش کپی شد</string>
+    <string name="log_empty">هنوز گزارشی ثبت نشده است. یک اتصال برقرار کنید تا رویدادها اینجا ثبت شوند.</string>
+    <string name="log_hint">اگر اتصال قطع می‌شود، دکمه «ارسال» را بزنید و متن گزارش را برای عیب‌یابی بفرستید.</string>
+    <string name="log_share_subject">گزارش عیب‌یابی SecureLink</string>
+    <string name="l2tp_disconnected_toast">اتصال L2TP قطع شد: %1$s</string>
 </resources>
