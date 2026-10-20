@@ -67,7 +67,10 @@ internal class L2tpClient(
     private enum class Phase { TUNNEL_CONNECT, SESSION_CONNECT, LCP, AUTH, IPCP, CONNECTED, CLOSED }
 
     // ---- ثابت‌ها ----
-    private val OUR_MRU = 1450            // MikroTik پیش‌فرض max-mru=1450
+    private val OUR_MRU = 1400            // باید برابر TUN_MTU بماند — توضیح در خط بعد
+    // اگر MRU بزرگ‌تر از MTU رابط TUN باشد، بسته‌های IP بزرگِ سرور (تا MRU-2) هنگام نوشتن در TUN
+    // بی‌صدا حذف می‌شوند → TCP در همان اولین استفاده گیر می‌کند و کاربر فکر می‌کند «قطع شد».
+    // با MRU=1400 سرور هرگز IP بزرگ‌تر از 1398 نمی‌فرستد و همه‌چیز در TUN جا می‌شود.
     private val TUN_MTU = 1400
     private val CONTROL_RETRY_MAX = 5
     private val PPP_RETRY_MAX = 10
@@ -143,6 +146,12 @@ internal class L2tpClient(
     private var negotiatedIp = 0
     private var dns1 = 0
     private var dns2 = 0
+
+    // ---- توالی داده (RFC 2661 §4.4.6 + §5.4) ----
+    // اگر سرور AVP «Sequencing Required» بفرستد، باید همه بسته‌های داده این جلسه
+    // فیلد Ns داشته باشند؛ فضای شماره توالی داده مستقل از فضای کنترل است.
+    private var dataSequencingRequired = false
+    private var dataNs = 0
 
     // ---- تانل TUN ----
     private var tunHandle: TunHandle? = null
@@ -383,6 +392,12 @@ internal class L2tpClient(
                 if (phase != Phase.SESSION_CONNECT) return
                 peerSessionId = L2tpWire.findAvp(avps, L2tpWire.AVP_ASSIGNED_SESSION_ID)?.u16() ?: 0
                 if (peerSessionId == 0) return shutdownInternal("سرور شناسه جلسه را ارسال نکرد")
+                // RFC 2661 §4.4.6 — اگر سرور توالی داده را الزامی کرده باشد باید رعایت شود
+                if (L2tpWire.findAvp(avps, L2tpWire.AVP_SEQUENCING_REQUIRED) != null) {
+                    dataSequencingRequired = true
+                    dataNs = 0
+                    VpnLog.log("L2TP", "سرور توالی داده را الزامی کرد — بسته‌های داده با Ns ارسال می‌شوند")
+                }
                 Log.i(TAG, "session established (sid=$peerSessionId)")
                 VpnLog.log("L2TP", "جلسه L2TP برقرار شد")
                 sendControl(L2tpWire.MSG_ICCN, peerSessionId, iccnAvps())
@@ -472,8 +487,7 @@ internal class L2tpClient(
         if (!magicRejected) opts.add(L2tpWire.optU32(L2tpWire.LCP_OPT_MAGIC, magic.toLong() and 0xFFFFFFFFL))
         lcpReqId = (lcpReqId + 1) and 0xFF
         // فریم PPP باید داخل پیام داده L2TP کپسوله شود — ارسال فریم خام قابل پردازش نیست
-        lcpConfReq = L2tpWire.buildData(
-            peerTunnelId, peerSessionId,
+        lcpConfReq = buildDataForSession(
             L2tpWire.pppControlPacket(L2tpWire.PPP_LCP, L2tpWire.CODE_CONFIGURE_REQUEST, lcpReqId, concatBytes(opts))
         )
         lcpReqRetries = 0
@@ -773,8 +787,7 @@ internal class L2tpClient(
         if (includeDns2Opt) opts.add(L2tpWire.optIp(L2tpWire.IPCP_OPT_SECONDARY_DNS, dns2))
         ipcpReqId = (ipcpReqId + 1) and 0xFF
         // کپسوله‌سازی در L2TP — همان اصلاح LCP
-        ipcpConfReq = L2tpWire.buildData(
-            peerTunnelId, peerSessionId,
+        ipcpConfReq = buildDataForSession(
             L2tpWire.pppControlPacket(L2tpWire.PPP_IPCP, L2tpWire.CODE_CONFIGURE_REQUEST, ipcpReqId, concatBytes(opts))
         )
         ipcpReqRetries = 0
@@ -866,7 +879,7 @@ internal class L2tpClient(
                     if (n <= 0) break
                     if (n < 20) continue
                     val frame = L2tpWire.pppFrame(L2tpWire.PPP_IPV4, buf, 0, n)
-                    val packet = L2tpWire.buildData(peerTunnelId, peerSessionId, frame)
+                    val packet = buildDataForSession(frame)
                     sendDatagram(packet)
                 }
             } catch (_: Exception) {
@@ -908,9 +921,20 @@ internal class L2tpClient(
         sendDatagram(packet)
     }
 
+    /** ساخت بسته داده جلسه — با توالی اگر سرور خواسته باشد */
+    private fun buildDataForSession(payload: ByteArray): ByteArray {
+        return if (dataSequencingRequired) {
+            val seq = dataNs
+            dataNs = (dataNs + 1) and 0xFFFF
+            L2tpWire.buildData(peerTunnelId, peerSessionId, payload, seq)
+        } else {
+            L2tpWire.buildData(peerTunnelId, peerSessionId, payload)
+        }
+    }
+
     private fun sendPppControl(protocol: Int, code: Int, id: Int, data: ByteArray) {
         val frame = L2tpWire.pppControlPacket(protocol, code, id, data)
-        val packet = L2tpWire.buildData(peerTunnelId, peerSessionId, frame)
+        val packet = buildDataForSession(frame)
         sendDatagram(packet)
     }
 

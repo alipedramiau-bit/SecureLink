@@ -149,4 +149,39 @@ class L2tpWireTest {
         assertTrue(list[0].hidden)
         assertEquals(0, list[0].value.size)
     }
+
+    @Test
+    fun `buildData default is unsequenced 0x4002 with 8 byte header`() {
+        val payload = byteArrayOf(1, 2, 3, 4, 5)
+        val pkt = L2tpWire.buildData(0x1111, 0x2222, payload)
+        assertEquals(8 + 5, pkt.size)
+        assertEquals(0x40.toByte(), pkt[0])
+        assertEquals(0x02.toByte(), pkt[1])
+        assertEquals(13, ((pkt[2].toInt() and 0xFF) shl 8) or (pkt[3].toInt() and 0xFF))
+        // round-trip: parse sees data, no seq
+        val parsed = L2tpWire.parse(pkt, pkt.size)!!
+        assertTrue(!parsed.isControl)
+        assertEquals(0x1111, parsed.tunnelId)
+        assertEquals(0x2222, parsed.sessionId)
+        assertEquals(0, parsed.ns)
+        assertEquals(0, parsed.nr)
+        assertEquals(8, parsed.payloadOffset)
+    }
+
+    @Test
+    fun `buildData sequenced form is 0x4802 with Ns field and 12 byte header`() {
+        val payload = byteArrayOf(9, 8, 7)
+        val pkt = L2tpWire.buildData(0x1111, 0x2222, payload, sequence = 7)
+        assertEquals(12 + 3, pkt.size)
+        assertEquals(0x48.toByte(), pkt[0])   // L=1 | S=1
+        assertEquals(0x02.toByte(), pkt[1])
+        assertEquals(15, ((pkt[2].toInt() and 0xFF) shl 8) or (pkt[3].toInt() and 0xFF))
+        assertEquals(7, ((pkt[8].toInt() and 0xFF) shl 8) or (pkt[9].toInt() and 0xFF))  // Ns
+        assertEquals(0, ((pkt[10].toInt() and 0xFF) shl 8) or (pkt[11].toInt() and 0xFF)) // Nr=0
+        // round-trip
+        val parsed = L2tpWire.parse(pkt, pkt.size)!!
+        assertTrue(!parsed.isControl)
+        assertEquals(7, parsed.ns)
+        assertEquals(12, parsed.payloadOffset)
+    }
 }

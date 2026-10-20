@@ -12,7 +12,8 @@ fun main() {
         "S4_zlb_regression_rfc2661_5_8" to { Scenarios.s4ZlbRegression() },
         "S5_tunnel_secret" to { Scenarios.s5TunnelSecret() },
         "S6_wrong_password_691" to { Scenarios.s6WrongPassword() },
-        "S7_mtu_1400_roundtrip" to { Scenarios.s7MtuSizePacket() }
+        "S7_mtu_1400_roundtrip" to { Scenarios.s7MtuSizePacket() },
+        "S8_sequencing_required" to { Scenarios.s8SequencingRequired() }
     )
 
     println("=== SecureLink L2TP Integration Test ===")

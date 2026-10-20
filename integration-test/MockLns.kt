@@ -22,7 +22,8 @@ class MockLns(
     val useSecret: String? = null,
     val dns1: String = "1.1.1.1",
     val dns2: String = "8.8.8.8",
-    val clientIp: String = "10.0.0.50"
+    val clientIp: String = "10.0.0.50",
+    val sequencingRequired: Boolean = false
 ) {
     enum class Auth { MSCHAP2, CHAP_MD5, PAP }
 
@@ -167,6 +168,10 @@ class MockLns(
                 val list = ArrayList<ByteArray>()
                 list.add(L2tpWire.avpU16(L2tpWire.AVP_MESSAGE_TYPE, L2tpWire.MSG_ICRP))
                 list.add(L2tpWire.avpU16(L2tpWire.AVP_ASSIGNED_SESSION_ID, 555))
+                if (sequencingRequired) {
+                    // RFC 2661 §4.4.6 — AVP بدون مقدار، Mandatory
+                    list.add(L2tpWire.avp(L2tpWire.AVP_SEQUENCING_REQUIRED, ByteArray(0), true))
+                }
                 sendControl(L2tpWire.MSG_ICRP, clientSid, concat(list))
             }
             L2tpWire.MSG_ICCN -> {
@@ -187,6 +192,13 @@ class MockLns(
     }
 
     private fun handleData(pkt: ByteArray, p: L2tpWire.ParsedPacket) {
+        // بررسی توالی داده — وقتی سرور (MockLns) Sequencing Required خواسته باشد،
+        // طبق RFC 2661 §4.4.6 کلاینت باید در همه بسته‌های داده فیلد Ns بگذارد
+        if (sequencingRequired) {
+            val flags = ((pkt[0].toInt() and 0xFF) shl 8) or (pkt[1].toInt() and 0xFF)
+            val sequenced = flags and L2tpWire.FLAG_SEQ != 0
+            events.add("CLIENT_DATA_SEQ(sequenced=$sequenced,Ns=${p.ns})")
+        }
         val parsedPpp = L2tpWire.parsePpp(pkt, p.payloadOffset, p.payloadEnd) ?: run {
             events.add("MOCK_BAD_PPP"); return
         }

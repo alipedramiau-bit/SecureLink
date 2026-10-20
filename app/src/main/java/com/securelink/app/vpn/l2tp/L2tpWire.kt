@@ -49,6 +49,7 @@ internal object L2tpWire {
     const val AVP_FRAMING_TYPE = 19
     const val AVP_TX_CONNECT_SPEED = 24
     const val AVP_RX_CONNECT_SPEED = 38
+    const val AVP_SEQUENCING_REQUIRED = 39
 
     // ---- پروتکل‌های PPP (RFC 1661) ----
     const val PPP_IPV4 = 0x0021
@@ -177,16 +178,30 @@ internal object L2tpWire {
         return out
     }
 
-    /** بسته داده L2TP با T=0، L=1 (فرم C002... یعنی 0x4002) — بدون توالی داده. */
-    fun buildData(tunnelId: Int, sessionId: Int, payload: ByteArray): ByteArray {
-        val length = 8 + payload.size
+    /**
+     * بسته داده L2TP.
+     *
+     * حالت پیش‌فرض: T=0, L=1, بدون توالی (هدر ۸ بایتی، Flags=0x4002).
+     * اگر sequence >= 0 باشد (وقتی سرور AVP «Sequencing Required» فرستاده — RFC 2661 §4.4.6)،
+     * S=1 هم می‌گذاریم (هدر ۱۲ بایتی، Flags=0x4802) و Ns=sequence و Nr=0
+     * (طبق RFC 2661 §3.1 مقدار Nr در بسته‌های داده هنگام دریافت باید نادیده گرفته شود).
+     * فضای شماره توالی داده، مستقل از فضای کنترل است (RFC 2661 §5.4).
+     */
+    fun buildData(tunnelId: Int, sessionId: Int, payload: ByteArray, sequence: Int = -1): ByteArray {
+        val sequenced = sequence >= 0
+        val length = (if (sequenced) 12 else 8) + payload.size
         val out = ByteArray(length)
-        out[0] = ((FLAG_LENGTH or VERSION) ushr 8).toByte()
-        out[1] = (FLAG_LENGTH or VERSION).toByte()
+        val flags = FLAG_LENGTH or VERSION or (if (sequenced) FLAG_SEQ else 0)
+        out[0] = (flags ushr 8).toByte()
+        out[1] = flags.toByte()
         putU16(out, 2, length)
         putU16(out, 4, tunnelId)
         putU16(out, 6, sessionId)
-        System.arraycopy(payload, 0, out, 8, payload.size)
+        if (sequenced) {
+            putU16(out, 8, sequence)
+            putU16(out, 10, 0)
+        }
+        System.arraycopy(payload, 0, out, if (sequenced) 12 else 8, payload.size)
         return out
     }
 

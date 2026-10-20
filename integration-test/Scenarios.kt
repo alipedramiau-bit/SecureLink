@@ -283,6 +283,36 @@ internal object Scenarios {
         }
     }
 
+    // ------------------------------------------------------------------
+    // S8 — سرور AVP «Sequencing Required» (RFC 2661 §4.4.6) می‌فرستد؛
+    // کلاینت باید همه بسته‌های داده را با فیلد Ns (فضای مستقل از کنترل) بفرستد.
+    // برخی MikroTik ها این AVP را می‌فرستند و جلسه‌ی بدون توالی را می‌بندند.
+    // ------------------------------------------------------------------
+
+    fun s8SequencingRequired(): String {
+        val lns = MockLns(auth = MockLns.Auth.MSCHAP2, sequencingRequired = true)
+        lns.start()
+        var ctx: Ctx? = null
+        try {
+            ctx = startClient(lns, helloMs = 25_000)
+            awaitEvent(lns, "CLIENT_ICCN", 10_000)
+            awaitEvent(lns, "CLIENT_IPCP_ACK_OURS", 5_000)
+            awaitTunUp(ctx)
+            dataRoundTrip(ctx, 300)
+            // همه بسته‌های داده (PPP کنترلی + IP) باید توالی‌دار بوده باشند
+            val seqEvents = lns.snapshot().filter { it.startsWith("CLIENT_DATA_SEQ") }
+            check(seqEvents.isNotEmpty()) { "هیچ بسته داده‌ای دیده نشد: ${lns.snapshot().take(40)}" }
+            val unsequenced = seqEvents.count { it.contains("sequenced=false") }
+            check(unsequenced == 0) {
+                "$unsequenced بسته داده بدون Ns فرستاده شد در حالی که سرور توالی الزامی کرده بود: ${seqEvents.take(10)}"
+            }
+            return "Sequencing-Required honored — all ${seqEvents.size} data packets carried Ns"
+        } finally {
+            ctx?.client?.shutdown("scenario-end")
+            lns.close()
+        }
+    }
+
     // ==================================================================
     // ابزارهای انتظار/بررسی
     // ==================================================================
